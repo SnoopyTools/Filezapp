@@ -1,16 +1,12 @@
 import SwiftUI
 
-private let textExts: Set<String> = [
-    "txt","log","json","xml","strings","md","markdown","swift","c","h","m","mm","cpp","hpp",
-    "sh","bash","zsh","conf","cfg","ini","yaml","yml","js","ts","css","html","htm","py","rb",
-    "pl","php","go","rs","java","kt","gradle","toml","env","gitignore","entitlements","pbxproj"
-]
-
 enum SortKey: String, CaseIterable { case name = "Name", size = "Size", date = "Date", kind = "Kind" }
 
 struct DirectoryView: View {
     @EnvironmentObject var app: AppModel
     let path: String
+
+    @AppStorage("gridMode") private var gridMode = false
 
     @State private var items: [FileItem] = []
     @State private var loadError: String?
@@ -21,7 +17,7 @@ struct DirectoryView: View {
     @State private var selectMode = false
     @State private var selected: Set<String> = []
 
-    // Sheets
+    // Viewers
     @State private var properties: FileItem?
     @State private var textEdit: FileItem?
     @State private var hex: FileItem?
@@ -39,28 +35,25 @@ struct DirectoryView: View {
     @State private var showDeleteConfirm = false
     @State private var errorMessage: String?
 
+    private let gridColumns = Array(repeating: GridItem(.flexible(), spacing: 14), count: 3)
+
     var body: some View {
-        List {
-            if let loadError {
-                Label(loadError, systemImage: "lock.slash").foregroundStyle(.secondary)
-            }
-            ForEach(filtered) { item in row(item) }
+        Group {
+            if gridMode && !selectMode { gridBody } else { listBody }
         }
-        .listStyle(.plain)
         .navigationTitle(path == "/" ? "/" : path.lastPath)
         .navigationBarTitleDisplayMode(.inline)
         .searchable(text: $search, placement: .navigationBarDrawer(displayMode: .automatic), prompt: "Search this folder")
         .refreshable { load() }
         .toolbar { toolbarContent }
+        .blueBar()
         .safeAreaInset(edge: .bottom) { if selectMode { selectionBar } }
         .task { load() }
-        // Viewers
         .sheet(item: $properties) { PropertiesView(item: $0).environmentObject(app) }
         .sheet(item: $textEdit) { TextEditorSheet(item: $0).environmentObject(app) }
         .sheet(item: $hex) { HexView(item: $0).environmentObject(app) }
         .sheet(item: $plist) { PlistView(item: $0).environmentObject(app) }
         .sheet(item: $preview) { PreviewSheet(item: $0).environmentObject(app) }
-        // Rename
         .alert("Rename", isPresented: Binding(get: { renameItem != nil }, set: { if !$0 { renameItem = nil } })) {
             TextField("Name", text: $renameText)
             Button("Cancel", role: .cancel) { renameItem = nil }
@@ -86,66 +79,77 @@ struct DirectoryView: View {
         } message: { Text(errorMessage ?? "") }
     }
 
-    // MARK: Rows
+    // MARK: List
 
-    @ViewBuilder private func row(_ item: FileItem) -> some View {
+    private var listBody: some View {
+        List {
+            if let loadError {
+                Label(loadError, systemImage: "lock.slash").foregroundStyle(.secondary)
+            }
+            ForEach(filtered) { item in listRow(item) }
+        }
+        .listStyle(.plain)
+    }
+
+    @ViewBuilder private func listRow(_ item: FileItem) -> some View {
         if selectMode {
-            Button { toggle(item) } label: { rowLabel(item, selectable: true) }
-                .buttonStyle(.plain)
+            Button { toggle(item) } label: { selectRow(item) }.buttonStyle(.plain)
         } else if item.isDirectory {
-            NavigationLink(value: item.path) { rowLabel(item) }
+            NavigationLink(value: item.path) { FileCell(item: item) }
                 .contextMenu { menu(item) }
                 .swipeActions { swipe(item) }
         } else {
-            Button { open(item) } label: { rowLabel(item) }
-                .buttonStyle(.plain)
+            Button { open(item) } label: { FileCell(item: item) }.buttonStyle(.plain)
                 .contextMenu { menu(item) }
                 .swipeActions { swipe(item) }
         }
     }
 
-    @ViewBuilder private func rowLabel(_ item: FileItem, selectable: Bool = false) -> some View {
+    private func selectRow(_ item: FileItem) -> some View {
         HStack(spacing: 12) {
-            if selectable {
-                Image(systemName: selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
-                    .foregroundStyle(selected.contains(item.id) ? Color.accentColor : .secondary)
-            }
-            Image(systemName: icon(item))
-                .foregroundStyle(item.isSymlink ? .orange : (item.isDirectory ? .accentColor : .secondary))
-                .frame(width: 24)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(item.name).lineLimit(1)
-                Text(subtitle(item)).font(.caption).foregroundStyle(.secondary)
-            }
+            Image(systemName: selected.contains(item.id) ? "checkmark.circle.fill" : "circle")
+                .foregroundStyle(selected.contains(item.id) ? Theme.primary : .secondary)
+            IconBadge(kind: .of(item))
+            Text(item.name).lineLimit(1)
             Spacer()
-            if item.isDirectory && !selectable {
-                Image(systemName: "chevron.right").font(.caption).foregroundStyle(.tertiary)
-            }
         }
         .contentShape(Rectangle())
     }
 
-    private func subtitle(_ item: FileItem) -> String {
-        if item.isDirectory { return Format.date(item.modified) }
-        return "\(Format.size(item.size)) · \(Format.date(item.modified))"
-    }
+    // MARK: Grid
 
-    private func icon(_ item: FileItem) -> String {
-        if item.isSymlink { return "arrow.triangle.turn.up.right.circle" }
-        if item.isDirectory { return "folder.fill" }
-        switch item.ext {
-        case "plist": return "list.bullet.rectangle"
-        case "zip","ipa","gz","tar","7z","rar": return "doc.zipper"
-        case "png","jpg","jpeg","gif","heic","webp","bmp": return "photo"
-        case "mp4","mov","m4v","mkv","avi": return "film"
-        case "mp3","m4a","wav","aac","flac": return "music.note"
-        case "pdf": return "doc.richtext"
-        case "deb": return "shippingbox"
-        default: return textExts.contains(item.ext) ? "doc.text" : "doc"
+    private var gridBody: some View {
+        ScrollView {
+            if let loadError {
+                Label(loadError, systemImage: "lock.slash").foregroundStyle(.secondary).padding()
+            }
+            LazyVGrid(columns: gridColumns, spacing: 14) {
+                ForEach(filtered) { item in gridCell(item) }
+            }
+            .padding()
         }
     }
 
-    // MARK: Context menu + swipe
+    @ViewBuilder private func gridCell(_ item: FileItem) -> some View {
+        let cell = VStack(spacing: 8) {
+            IconBadge(kind: .of(item), size: 56)
+            Text(item.name).font(.caption).lineLimit(2).multilineTextAlignment(.center)
+                .frame(height: 32, alignment: .top)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 10)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(Rectangle())
+
+        if item.isDirectory {
+            NavigationLink(value: item.path) { cell }.buttonStyle(.plain).contextMenu { menu(item) }
+        } else {
+            Button { open(item) } label: { cell }.buttonStyle(.plain).contextMenu { menu(item) }
+        }
+    }
+
+    // MARK: Menus
 
     @ViewBuilder private func menu(_ item: FileItem) -> some View {
         if !item.isDirectory {
@@ -179,17 +183,19 @@ struct DirectoryView: View {
         Button { startRename(item) } label: { Label("Rename", systemImage: "pencil") }.tint(.indigo)
     }
 
-    // MARK: Toolbar
-
     @ToolbarContentBuilder private var toolbarContent: some ToolbarContent {
+        ToolbarItem(placement: .topBarTrailing) {
+            Button { gridMode.toggle() } label: {
+                Image(systemName: gridMode ? "list.bullet" : "square.grid.2x2")
+            }
+        }
         ToolbarItem(placement: .topBarTrailing) {
             Menu {
                 Picker("Sort by", selection: $sort) {
                     ForEach(SortKey.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                 }
                 Button { ascending.toggle() } label: {
-                    Label(ascending ? "Ascending" : "Descending",
-                          systemImage: ascending ? "arrow.up" : "arrow.down")
+                    Label(ascending ? "Ascending" : "Descending", systemImage: ascending ? "arrow.up" : "arrow.down")
                 }
                 Divider()
                 Button { showNewFolder = true; newFolderName = "" } label: { Label("New Folder", systemImage: "folder.badge.plus") }
@@ -206,9 +212,7 @@ struct DirectoryView: View {
             } label: { Image(systemName: "ellipsis.circle") }
         }
         if selectMode {
-            ToolbarItem(placement: .topBarLeading) {
-                Button("Done") { selectMode = false; selected = [] }
-            }
+            ToolbarItem(placement: .topBarLeading) { Button("Done") { endSelect() } }
         }
     }
 
@@ -237,13 +241,12 @@ struct DirectoryView: View {
     // MARK: Data
 
     private var filtered: [FileItem] {
-        let base = search.isEmpty ? items
-            : items.filter { $0.name.localizedCaseInsensitiveContains(search) }
+        let base = search.isEmpty ? items : items.filter { $0.name.localizedCaseInsensitiveContains(search) }
         return base.sorted(by: order)
     }
 
     private func order(_ a: FileItem, _ b: FileItem) -> Bool {
-        if a.isDirectory != b.isDirectory { return a.isDirectory }   // folders first
+        if a.isDirectory != b.isDirectory { return a.isDirectory }
         let result: Bool
         switch sort {
         case .name: result = a.name.localizedCaseInsensitiveCompare(b.name) == .orderedAscending
@@ -260,8 +263,9 @@ struct DirectoryView: View {
     }
 
     private func open(_ item: FileItem) {
-        if textExts.contains(item.ext) { textEdit = item }
-        else if item.ext == "plist" { plist = item }
+        let kind = FileKind.of(item)
+        if kind.isTextLike { textEdit = item }
+        else if kind == .plist { plist = item }
         else { preview = item }
     }
 
@@ -276,27 +280,23 @@ struct DirectoryView: View {
 
     private func performRename() {
         guard let item = renameItem else { return }
-        let dest = path.appendingPath(renameText)
-        do { try app.fs.move(item.path, to: dest); load() } catch { errorMessage = error.localizedDescription }
+        do { try app.fs.move(item.path, to: path.appendingPath(renameText)); load() }
+        catch { errorMessage = error.localizedDescription }
         renameItem = nil
     }
 
     private func performNewFolder() {
-        let name = newFolderName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        let name = newFolderName.trimmingCharacters(in: .whitespaces); guard !name.isEmpty else { return }
         do { try app.fs.createDirectory(path.appendingPath(name)); load() } catch { errorMessage = error.localizedDescription }
     }
 
     private func performNewFile() {
-        let name = newFileName.trimmingCharacters(in: .whitespaces)
-        guard !name.isEmpty else { return }
+        let name = newFileName.trimmingCharacters(in: .whitespaces); guard !name.isEmpty else { return }
         do { try app.fs.createFile(path.appendingPath(name), contents: Data()); load() } catch { errorMessage = error.localizedDescription }
     }
 
     private func performDelete() {
-        for p in pendingDelete {
-            do { try app.fs.remove(p) } catch { errorMessage = error.localizedDescription }
-        }
+        for p in pendingDelete { do { try app.fs.remove(p) } catch { errorMessage = error.localizedDescription } }
         pendingDelete = []; endSelect(); load()
     }
 
