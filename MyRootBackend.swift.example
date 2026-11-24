@@ -1,0 +1,48 @@
+//  MyRootBackend.swift.example
+//
+//  Template for the ONE piece Filez ships without: the root backend.
+//  Rename this to `MyRootBackend.swift`, fill in the primitives with whatever
+//  root-access mechanism you provide, and register it at launch. Nothing else
+//  in the app changes — the whole UI already runs on top of `RootBackend`.
+//
+//  Register it once, e.g. in FilezApp.init():
+//
+//      init() { RootBackendRegistry.active = MyRootBackend() }
+//
+//  Each method takes an absolute POSIX path. Return/throw as documented in
+//  RootBackend.swift. `isAvailable` should return false until root is actually
+//  established, so the app stays sandboxed if setup fails.
+
+import Foundation
+
+struct MyRootBackend: RootBackend {
+    var isAvailable: Bool {
+        // Return true only once privileged file access is genuinely in place.
+        false
+    }
+
+    func list(_ path: String) throws -> [RawEntry] {
+        throw FileAccessError.rootUnavailable
+    }
+    func attributes(_ path: String) throws -> FileAttributes {
+        throw FileAccessError.rootUnavailable
+    }
+    func read(_ path: String) throws -> Data {
+        throw FileAccessError.rootUnavailable
+    }
+    func write(_ data: Data, _ path: String) throws {
+        throw FileAccessError.rootUnavailable
+    }
+    func createDirectory(_ path: String) throws {
+        throw FileAccessError.rootUnavailable
+    }
+    func remove(_ path: String) throws {
+        throw FileAccessError.rootUnavailable
+    }
+    func move(_ from: String, _ to: String) throws {
+        throw FileAccessError.rootUnavailable
+    }
+    func setPosixPermissions(_ mode: UInt16, _ path: String) throws {
+        throw FileAccessError.rootUnavailable
+    }
+}
